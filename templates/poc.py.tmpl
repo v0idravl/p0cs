@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""
+<CVE-XXXX-XXXXX> — <one-line title>.
+
+<2-4 lines: what the bug is, the chain, what the PoC does and returns.>
+
+Invoked uniformly via the repo runner (preferred):
+    ./run <slug> RHOST=<ip> RPORT=<port> ...
+or standalone:
+    python3 poc.py <args matching argv_template in metadata.yaml>
+
+Authorized targets only. Takes the target as an argument; never hardcodes one.
+Read-only / exploit / dangerous: <state which, and any safety notes>.
+"""
+import sys
+
+
+def main(argv):
+    # options arrive positionally per metadata.yaml argv_template (and as P0C_<KEY> env).
+    if not argv:
+        print(__doc__)
+        return 2
+    # ... implement ...
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

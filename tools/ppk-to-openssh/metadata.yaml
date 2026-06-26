@@ -1,0 +1,13 @@
+# p0cs helper metadata — read by ./run.
+id: ppk-to-openssh
+cve: ~
+name: PuTTY .ppk (unencrypted RSA) -> OpenSSH private key, no puttygen
+type: converter
+lang: python
+entrypoint: convert.py
+options: [PPK]
+required: [PPK]
+argv_template: ["{PPK}"]
+msf_module: ~
+references: []
+authorized_use_only: true

@@ -1,0 +1,41 @@
+##
+# Metasploit module template for a p0cs PoC.
+# Place under modules/<type>/<platform>/<service>/<name>.rb — the path under
+# modules/ becomes the module fullname (e.g. modules/exploits/multi/http/foo.rb
+# -> exploit/multi/http/foo). Then `./run --install-modules` and `./run --as-msf <slug>`.
+# Requires Metasploit: https://metasploit.com/download
+##
+
+class MetasploitModule < Msf::Exploit::Remote
+  Rank = NormalRanking
+
+  include Msf::Exploit::Remote::HttpClient
+  prepend Msf::Exploit::Remote::AutoCheck
+
+  def initialize(info = {})
+    super(
+      update_info(
+        info,
+        'Name' => '<title> (CVE-XXXX-XXXXX)',
+        'Description' => %q{ <what it does> },
+        'Author' => ['v0idravl'],
+        'License' => MSF_LICENSE,
+        'References' => [['CVE', 'XXXX-XXXXX']],
+        'Platform' => 'php',
+        'Targets' => [['Automatic', {}]],
+        'DefaultTarget' => 0,
+        'DisclosureDate' => 'XXXX-XX-XX'
+      )
+    )
+    register_options([Opt::RPORT(80)])
+  end
+
+  def check
+    # CheckCode::Appears / Safe / Vulnerable
+    CheckCode::Unknown
+  end
+
+  def exploit
+    # ... send the request chain, deliver the payload ...
+  end
+end

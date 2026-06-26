@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+p0cs runner — one uniform entrypoint for every proof-of-concept in this repo.
+
+Each entry lives in `pocs/<slug>/` (exploits/aux) or `tools/<slug>/` (helpers) with a `metadata.yaml`
+that declares how to invoke it. The runner reads that metadata, validates the
+options you passed, builds the argv the underlying script expects, and execs it
+with the right interpreter — so heterogeneous PoCs (positional args, argparse
+flags, python/ruby/bash) all run the same way:
+
+    ./run <slug> RHOST=10.10.10.5 RPORT=443 CMD='id'
+
+Other modes:
+    ./run --list                 table of every PoC (slug, type, cve, name)
+    ./run --show <slug>          print a PoC's metadata + usage
+    ./run --new <slug>           scaffold a new PoC from templates/
+    ./run --as-msf <slug>        print the msfconsole loadpath/use recipe (if it has a module)
+    ./run --install-modules      symlink modules/* into ~/.msf4/modules so msfrpcd + the
+                                 Metasploit MCP can `use` them as native modules
+
+Authorized targets only. PoCs take the target as an option; never hardcode one.
+"""
+import os
+import re
+import sys
+import subprocess
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent
+POC_DIRS = ["pocs", "tools"]   # pocs/ = exploits + auxiliary; tools/ = helpers (converters, decoders, clients)
+INTERP = {"python": ["python3"], "ruby": ["ruby"], "bash": ["bash"], "sh": ["sh"]}
+
+
+# --- minimal YAML-subset parser (flat key: value, inline [lists], # comments) ---
+def parse_meta(text):
+    meta = {}
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, val = line.split(":", 1)
+        key, val = key.strip(), _strip_comment(val.strip())
+        if val.startswith("[") and val.endswith("]"):
+            inner = val[1:-1].strip()
+            items = []
+            if inner:
+                items = [p.strip().strip('"').strip("'") for p in _split_list(inner)]
+            meta[key] = items
+        elif val in ("true", "false"):
+            meta[key] = (val == "true")
+        elif val == "" or val == "null" or val == "~":
+            meta[key] = None
+        else:
+            meta[key] = val.strip('"').strip("'")
+    return meta
+
+
+def _strip_comment(val):
+    """Drop a trailing ' #...' inline comment, but not a '#' inside quotes."""
+    q = None
+    for i, ch in enumerate(val):
+        if q:
+            if ch == q:
+                q = None
+        elif ch in "\"'":
+            q = ch
+        elif ch == "#" and i > 0 and val[i - 1] in " \t":
+            return val[:i].rstrip()
+    return val
+
+
+def _split_list(s):
+    out, buf, q = [], "", None
+    for ch in s:
+        if q:
+            if ch == q:
+                q = None
+            buf += ch
+        elif ch in "\"'":
+            q = ch
+            buf += ch
+        elif ch == ",":
+            out.append(buf)
+            buf = ""
+        else:
+            buf += ch
+    if buf.strip():
+        out.append(buf)
+    return out
+
+
+def discover():
+    """slug -> (dir, metadata) for every PoC with a metadata.yaml."""
+    found = {}
+    for base in POC_DIRS:
+        for mpath in sorted((REPO / base).glob("*/metadata.yaml")):
+            meta = parse_meta(mpath.read_text())
+            slug = meta.get("id") or mpath.parent.name
+            found[slug] = (mpath.parent, meta)
+    return found
+
+
+def cmd_list():
+    found = discover()
+    if not found:
+        print("No PoCs yet. Scaffold one: ./run --new <slug>")
+        return
+    w = max(len(s) for s in found)
+    print(f"{'SLUG'.ljust(w)}  {'TYPE'.ljust(10)} {'CVE'.ljust(16)} NAME")
+    for slug in sorted(found):
+        _d, m = found[slug]
+        cve = (m.get("cve") or "-")
+        msf = "  [msf]" if m.get("msf_module") else ""
+        print(f"{slug.ljust(w)}  {str(m.get('type','-')).ljust(10)} {str(cve).ljust(16)} {m.get('name','')}{msf}")
+
+
+def cmd_show(slug):
+    d, m = _need(slug)
+    print(f"# {slug}  ({m.get('type')})\n")
+    for k, v in m.items():
+        print(f"{k}: {v}")
+    print(f"\nusage: ./run {slug} " + " ".join(f"{o}=<v>" for o in m.get("required", [])))
+    if m.get("msf_module"):
+        print(f"msf:   ./run --as-msf {slug}")
+
+
+def cmd_as_msf(slug):
+    d, m = _need(slug)
+    mod = m.get("msf_module")
+    if not mod:
+        sys.exit(f"{slug} has no msf_module in metadata.")
+    full = mod if mod.startswith(("exploit", "auxiliary", "post")) else f"exploit/{mod}"
+    print(f"# Load {slug} as a native Metasploit module\n")
+    print("# A) interactive msfconsole:")
+    print(f"msfconsole -q -x 'loadpath {REPO}/modules; use {full}; options'\n")
+    print("# B) via msfrpcd + the Metasploit MCP (modules must live under ~/.msf4/modules):")
+    print("./run --install-modules            # one-time: symlinks this repo's modules into ~/.msf4/modules")
+    print(f"#   then: mcp__metasploit__run_exploit(\"{full}\", {{RHOSTS, ...}}, payload_name=...)")
+
+
+def cmd_install_modules():
+    src = REPO / "modules"
+    dst = Path.home() / ".msf4" / "modules"
+    n = 0
+    for rb in src.rglob("*.rb"):
+        rel = rb.relative_to(src)
+        link = dst / rel
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(rb)
+        n += 1
+        print(f"  linked {rel}")
+    print(f"{n} module(s) linked into {dst}. Restart msfrpcd / reload to pick them up.")
+
+
+def cmd_new(slug, kind="poc"):
+    slug = slug.lower()
+    base = "tools" if kind in ("tool", "helper") else "pocs"
+    d = REPO / base / slug
+    if d.exists():
+        sys.exit(f"{d} already exists.")
+    d.mkdir(parents=True)
+    tpl = REPO / "templates"
+    (d / "metadata.yaml").write_text((tpl / "metadata.yaml.tmpl").read_text().replace("{{SLUG}}", slug))
+    (d / "poc.py").write_text((tpl / "poc.py.tmpl").read_text())
+    (d / "README.md").write_text((tpl / "README.md.tmpl").read_text().replace("{{SLUG}}", slug))
+    print(f"Scaffolded {d}/ — edit metadata.yaml, poc.py, README.md. (msf module? see templates/module.rb.tmpl)")
+
+
+def _need(slug):
+    found = discover()
+    if slug not in found:
+        sys.exit(f"unknown PoC '{slug}'. ./run --list to see them.")
+    return found[slug]
+
+
+def cmd_run(slug, kvs):
+    d, m = _need(slug)
+    opts = {}
+    for kv in kvs:
+        if "=" not in kv:
+            sys.exit(f"bad option '{kv}' — expected KEY=VALUE")
+        k, v = kv.split("=", 1)
+        opts[k.upper()] = v
+    missing = [r for r in m.get("required", []) if r not in opts]
+    if missing:
+        sys.exit(f"missing required option(s): {', '.join(missing)}\nusage: ./run {slug} "
+                 + " ".join(f"{o}=<v>" for o in m.get("required", [])))
+
+    entry = d / (m.get("entrypoint") or "poc.py")
+    interp = INTERP.get(m.get("lang", "python"))
+    if not interp:
+        sys.exit(f"unknown lang '{m.get('lang')}' for {slug}")
+
+    # build argv from argv_template ({KEY} placeholders); drop tokens whose only
+    # placeholder is an unset optional. No template -> pass KEY=VALUE through.
+    argv = []
+    tmpl = m.get("argv_template")
+    if tmpl:
+        for tok in tmpl:
+            ph = re.findall(r"\{(\w+)\}", tok)
+            if ph and all(opts.get(p, "") == "" for p in ph):
+                continue
+            argv.append(re.sub(r"\{(\w+)\}", lambda mo: opts.get(mo.group(1), ""), tok))
+    else:
+        argv = [f"{k}={v}" for k, v in opts.items()]
+
+    env = dict(os.environ)
+    env.update({f"P0C_{k}": v for k, v in opts.items()})  # also exported, for PoCs that read env
+    cmd = interp + [str(entry)] + argv
+    print(f"[p0cs] {slug}: {' '.join(cmd)}", file=sys.stderr)
+    sys.exit(subprocess.call(cmd, env=env))
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return
+    a = argv[0]
+    if a == "--list":
+        cmd_list()
+    elif a == "--show":
+        cmd_show(argv[1])
+    elif a == "--as-msf":
+        cmd_as_msf(argv[1])
+    elif a == "--install-modules":
+        cmd_install_modules()
+    elif a == "--new":
+        cmd_new(argv[1], argv[2] if len(argv) > 2 else "poc")   # ./run --new <slug> [tool]
+    elif a.startswith("-"):
+        sys.exit(f"unknown flag {a}. --help for usage.")
+    else:
+        cmd_run(a, argv[1:])
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

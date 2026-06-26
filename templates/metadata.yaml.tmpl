@@ -1,0 +1,16 @@
+# p0cs PoC metadata — read by ./run. Flat key: value, inline [lists], # comments.
+id: {{SLUG}}                      # the slug / dir name; how ./run addresses it
+cve: ~                           # CVE-XXXX-XXXXX or ~ if none
+name: ""                         # short human title
+type: exploit                    # exploit | auxiliary | converter
+lang: python                     # python | ruby | bash
+entrypoint: poc.py               # the script ./run executes
+options: [RHOST, RPORT, LHOST, LPORT]   # all options this PoC understands
+required: [RHOST]                # subset that must be supplied
+argv_template: ["{RHOST}", "{RPORT}"]   # how options map to the script's argv;
+                                 # {KEY} is substituted; an unset optional token is dropped.
+                                 # omit entirely to pass KEY=VALUE through verbatim.
+msf_module: ~                    # path under modules/ (e.g. exploits/multi/http/foo) if a Ruby
+                                 # module exists, else ~. Lets ./run --as-msf wire it into msf.
+references: []                   # CVE id + URLs
+authorized_use_only: true

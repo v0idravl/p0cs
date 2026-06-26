@@ -1,0 +1,19 @@
+# never commit engagement/target specifics or local artifacts
+*.dmp
+*.ppk
+id_rsa*
+*.pem
+*.key
+loot/
+out/
+scratch/
+*.session
+# target lists / anything with real hosts
+urls.txt
+targets.txt
+hosts.txt
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
