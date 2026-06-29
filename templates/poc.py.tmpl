@@ -26,3 +26,18 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
+
+# ---------------------------------------------------------------------------
+# Sliver cradle injection stub (activate by setting c2_staging.supported: true
+# in metadata.yaml and filling in cradle_template + staged_payload_format).
+#
+# Example flow when used with ./run --stage-sliver <slug> <SLIVER_URL>:
+#   1. ./run generates the composed cradle command (cradle_template + URL sub).
+#   2. Deliver the cradle string via the exploit's execution primitive below.
+#
+# def _deliver_cradle(cradle_cmd, exec_primitive):
+#     """Sub the staged cradle into the exploit's code-exec primitive."""
+#     # e.g. exec_primitive(f"bash -c '{cradle_cmd}'")
+#     pass
+# ---------------------------------------------------------------------------
