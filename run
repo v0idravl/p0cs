@@ -14,9 +14,7 @@ Other modes:
     ./run --list                 table of every PoC (slug, type, cve, name)
     ./run --show <slug>          print a PoC's metadata + usage
     ./run --new <slug>           scaffold a new PoC from templates/
-    ./run --as-msf <slug>        print the msfconsole loadpath/use recipe (if it has a module)
-    ./run --install-modules      symlink modules/* into ~/.msf4/modules so msfrpcd + the
-                                 Metasploit MCP can `use` them as native modules
+    ./run --stage-sliver <slug> <url>   compose the c2_staging cradle with SLIVER_URL substituted
 
 Authorized targets only. PoCs take the target as an option; never hardcode one.
 """
@@ -112,8 +110,7 @@ def cmd_list():
     for slug in sorted(found):
         _d, m = found[slug]
         cve = (m.get("cve") or "-")
-        msf = "  [msf]" if m.get("msf_module") else ""
-        print(f"{slug.ljust(w)}  {str(m.get('type','-')).ljust(10)} {str(cve).ljust(16)} {m.get('name','')}{msf}")
+        print(f"{slug.ljust(w)}  {str(m.get('type','-')).ljust(10)} {str(cve).ljust(16)} {m.get('name','')}")
 
 
 def cmd_show(slug):
@@ -122,38 +119,6 @@ def cmd_show(slug):
     for k, v in m.items():
         print(f"{k}: {v}")
     print(f"\nusage: ./run {slug} " + " ".join(f"{o}=<v>" for o in m.get("required", [])))
-    if m.get("msf_module"):
-        print(f"msf:   ./run --as-msf {slug}")
-
-
-def cmd_as_msf(slug):
-    d, m = _need(slug)
-    mod = m.get("msf_module")
-    if not mod:
-        sys.exit(f"{slug} has no msf_module in metadata.")
-    full = mod if mod.startswith(("exploit", "auxiliary", "post")) else f"exploit/{mod}"
-    print(f"# Load {slug} as a native Metasploit module\n")
-    print("# A) interactive msfconsole:")
-    print(f"msfconsole -q -x 'loadpath {REPO}/modules; use {full}; options'\n")
-    print("# B) via msfrpcd + the Metasploit MCP (modules must live under ~/.msf4/modules):")
-    print("./run --install-modules            # one-time: symlinks this repo's modules into ~/.msf4/modules")
-    print(f"#   then: mcp__metasploit__run_exploit(\"{full}\", {{RHOSTS, ...}}, payload_name=...)")
-
-
-def cmd_install_modules():
-    src = REPO / "modules"
-    dst = Path.home() / ".msf4" / "modules"
-    n = 0
-    for rb in src.rglob("*.rb"):
-        rel = rb.relative_to(src)
-        link = dst / rel
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink() or link.exists():
-            link.unlink()
-        link.symlink_to(rb)
-        n += 1
-        print(f"  linked {rel}")
-    print(f"{n} module(s) linked into {dst}. Restart msfrpcd / reload to pick them up.")
 
 
 def cmd_new(slug, kind="poc"):
@@ -167,7 +132,19 @@ def cmd_new(slug, kind="poc"):
     (d / "metadata.yaml").write_text((tpl / "metadata.yaml.tmpl").read_text().replace("{{SLUG}}", slug))
     (d / "poc.py").write_text((tpl / "poc.py.tmpl").read_text())
     (d / "README.md").write_text((tpl / "README.md.tmpl").read_text().replace("{{SLUG}}", slug))
-    print(f"Scaffolded {d}/ — edit metadata.yaml, poc.py, README.md. (msf module? see templates/module.rb.tmpl)")
+    print(f"Scaffolded {d}/ — edit metadata.yaml, poc.py, README.md.")
+
+
+def cmd_stage_sliver(slug, url):
+    d, m = _need(slug)
+    if not m.get("supported"):
+        sys.exit(f"{slug}: c2_staging.supported is not true in metadata.yaml")
+    tmpl = m.get("cradle_template")
+    if not tmpl:
+        sys.exit(f"{slug}: c2_staging.cradle_template is not set in metadata.yaml")
+    cradle = tmpl.replace("{SLIVER_URL}", url)
+    print(f"# Sliver staging cradle for {slug}")
+    print(cradle)
 
 
 def _need(slug):
@@ -224,10 +201,8 @@ def main(argv):
         cmd_list()
     elif a == "--show":
         cmd_show(argv[1])
-    elif a == "--as-msf":
-        cmd_as_msf(argv[1])
-    elif a == "--install-modules":
-        cmd_install_modules()
+    elif a == "--stage-sliver":
+        cmd_stage_sliver(argv[1], argv[2])
     elif a == "--new":
         cmd_new(argv[1], argv[2] if len(argv) > 2 else "poc")   # ./run --new <slug> [tool]
     elif a.startswith("-"):
